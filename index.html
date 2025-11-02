@@ -2,16 +2,104 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>My GitHub Pages Website</title>
-  <link rel="stylesheet" href="style.css">
+  <title>WebUSB Terminal Tool</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 2em; background: #f7f7f7; }
+    #log { background: #222; color: #eee; padding: 1em; border-radius: 8px; height: 250px; overflow-y: auto; }
+    input, button { font-size: 1rem; margin-top: 0.5em; }
+    #commandRow { margin-bottom: 1em; }
+  </style>
 </head>
 <body>
-  <main>
-    <h1>Hello, World!</h1>
-    <p>Welcome to my free website hosted on GitHub Pages.</p>
-  </main>
-  <footer>
-    <p>Made with ❤️ using GitHub Pages</p>
-  </footer>
+  <h1>WebUSB Terminal Tool</h1>
+  <button id="connectBtn">Connect to USB Device</button>
+  <div id="deviceInfo"></div>
+  <div id="commandRow" style="display:none;">
+    <input type="text" id="commandInput" placeholder="Type command (e.g., AT)" style="width:70%;">
+    <button id="sendBtn">Send</button>
+  </div>
+  <pre id="log"></pre>
+  <script>
+    let device;
+    let interfaceNumber = null;
+    let endpointIn = null;
+    let endpointOut = null;
+
+    function log(msg) {
+      const logEl = document.getElementById('log');
+      logEl.textContent += msg + '\n';
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function hex(bytes) {
+      return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    }
+
+    document.getElementById('connectBtn').onclick = async () => {
+      try {
+        device = await navigator.usb.requestDevice({ filters: [] }); // Empty to show all devices
+        await device.open();
+        if (device.configuration === null) {
+          await device.selectConfiguration(1);
+        }
+        // Find first interface with OUT endpoint
+        const iface = device.configuration.interfaces.find(iface =>
+          iface.alternate.endpoints.some(ep => ep.direction === 'out')
+        );
+        if (!iface) throw new Error('No suitable interface found');
+        interfaceNumber = iface.interfaceNumber;
+        endpointOut = iface.alternate.endpoints.find(ep => ep.direction === 'out').endpointNumber;
+        endpointIn = iface.alternate.endpoints.find(ep => ep.direction === 'in').endpointNumber;
+
+        await device.claimInterface(interfaceNumber);
+
+        document.getElementById('deviceInfo').textContent =
+          `Connected: ${device.productName} (Vendor: 0x${device.vendorId.toString(16)}, Product: 0x${device.productId.toString(16)})`;
+        document.getElementById('commandRow').style.display = '';
+        log('Connected to: ' + device.productName);
+        listenForResponses();
+      } catch (err) {
+        log('Error: ' + err.message);
+      }
+    };
+
+    async function listenForResponses() {
+      while (device && device.opened) {
+        try {
+          const result = await device.transferIn(endpointIn, 64);
+          if (result.data) {
+            let text = '';
+            try {
+              text = new TextDecoder().decode(result.data);
+            } catch {
+              text = hex(result.data);
+            }
+            log('Device: ' + text.trim());
+          }
+        } catch (err) {
+          log('Read error: ' + err.message);
+          break;
+        }
+      }
+    }
+
+    document.getElementById('sendBtn').onclick = async () => {
+      const cmd = document.getElementById('commandInput').value;
+      if (!cmd || !device) return;
+      try {
+        const data = new TextEncoder().encode(cmd + '\r');
+        await device.transferOut(endpointOut, data);
+        log('You: ' + cmd);
+        document.getElementById('commandInput').value = '';
+      } catch (err) {
+        log('Send error: ' + err.message);
+      }
+    };
+
+    document.getElementById('commandInput').addEventListener('keypress', e => {
+      if (e.key === 'Enter') document.getElementById('sendBtn').click();
+    });
+  </script>
 </body>
 </html>
